@@ -4,20 +4,69 @@ import '@google/model-viewer';
 const modelViewer = document.querySelector('model-viewer');
 const hotspots = document.querySelectorAll('.Hotspot');
 
-let defaultTarget = '0m 0.5m 0m';
+// Default target & camera orbit setup
+let defaultTarget = '0m 1.22m 0m';
 
-// Capture actual model center once it loads to use as reset target
 modelViewer.addEventListener('load', () => {
   try {
     const target = modelViewer.getCameraTarget();
     defaultTarget = `${target.x}m ${target.y}m ${target.z}m`;
-    console.log('Model loaded successfully. Initial camera target: ', defaultTarget);
+    console.log('Model loaded. Target: ', defaultTarget);
   } catch (e) {
     console.error('Error reading camera target on load:', e);
   }
 });
 
-// Dim other hotspots and target camera on click
+/* ==========================================================================
+   AR Trigger & QR Modal Control (External Button)
+   ========================================================================== */
+
+const customArBtn = document.getElementById('custom-ar-btn');
+const qrModal = document.getElementById('qr-modal');
+const modalCloseBtn = document.getElementById('modal-close');
+const qrImage = document.getElementById('qr-image');
+
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+customArBtn.addEventListener('click', () => {
+  if (isMobile) {
+    // Mobile device: activate native AR overlay camera
+    try {
+      modelViewer.activateAR();
+    } catch (e) {
+      console.error('AR activation failed:', e);
+    }
+  } else {
+    // Desktop device: show QR Modal explaining mobile-only restriction
+    const currentUrl = window.location.href;
+    // Generate QR code pointing to the current page
+    qrImage.src = `https://api.qrserver.com/v1/create-qr-code/?size=210x210&data=${encodeURIComponent(currentUrl)}&color=0c0a09&bgcolor=ffffff&qzone=2`;
+    qrModal.style.display = 'flex';
+  }
+});
+
+modalCloseBtn.addEventListener('click', () => {
+  qrModal.style.display = 'none';
+});
+
+qrModal.addEventListener('click', (e) => {
+  if (e.target === qrModal) {
+    qrModal.style.display = 'none';
+  }
+});
+
+/* ==========================================================================
+   Hotspots and Camera Focus Management
+   ========================================================================== */
+
+// Dismiss hotspot on clicking empty space on the model-viewer
+modelViewer.addEventListener('click', (event) => {
+  if (!event.target.closest('.Hotspot')) {
+    deactivateAllHotspots();
+  }
+});
+
+// Capture active hotspot toggles
 hotspots.forEach(hotspot => {
   hotspot.addEventListener('click', (event) => {
     const isCloseClick = event.target.classList.contains('HotspotClose');
@@ -28,7 +77,7 @@ hotspots.forEach(hotspot => {
       return;
     }
     
-    // Ignore clicks inside the active annotation card itself (except close buttons)
+    // Ignore clicks inside the active annotation card itself
     if (hotspot.classList.contains('active') && event.target.closest('.HotspotAnnotation')) {
       return;
     }
@@ -42,15 +91,7 @@ hotspots.forEach(hotspot => {
   });
 });
 
-// Dismiss hotspot on clicking empty space on the model-viewer
-modelViewer.addEventListener('click', (event) => {
-  if (!event.target.closest('.Hotspot')) {
-    deactivateAllHotspots();
-  }
-});
-
 function activateHotspot(hotspot) {
-  // Clear other active hotspots
   hotspots.forEach(h => {
     if (h !== hotspot) {
       h.classList.remove('active');
@@ -59,54 +100,42 @@ function activateHotspot(hotspot) {
     }
   });
   
-  // Set active classes
   hotspot.classList.add('active');
   modelViewer.classList.add('has-active-hotspot');
   
-  // Stop auto-rotation to keep the info card text perfectly stable
   modelViewer.autoRotate = false;
   
-  // Smoothly transition camera target to focus attention on this part
   const position = hotspot.getAttribute('data-position');
   if (position) {
     modelViewer.cameraTarget = position;
   }
   
-  // Position the card so it doesn't clip
   requestAnimationFrame(() => {
     setTimeout(() => positionAnnotation(hotspot), 60);
   });
 }
 
-/**
- * Measures the annotation card against the model-viewer bounds and
- * applies horizontal shift + vertical flip as needed.
- */
 function positionAnnotation(hotspot) {
   const annotation = hotspot.querySelector('.HotspotAnnotation');
   if (!annotation) return;
   
-  // Reset transforms to measure cleanly
   hotspot.style.setProperty('--shift-x', '0px');
   hotspot.classList.remove('flipped');
   
   const viewerRect = modelViewer.getBoundingClientRect();
   
-  // Force a reflow so we measure the un-flipped position
   void annotation.offsetHeight;
   let annRect = annotation.getBoundingClientRect();
   
-  // --- Vertical: flip below if the card goes above the viewer ---
+  // Vertical alignment check
   if (annRect.top < viewerRect.top + 5) {
     hotspot.classList.add('flipped');
-    // re-measure after flipping
     void annotation.offsetHeight;
     annRect = annotation.getBoundingClientRect();
   }
   
-  // --- Horizontal: shift left/right if it overflows the sides ---
+  // Horizontal alignment check
   let shiftX = 0;
-  
   if (annRect.right > viewerRect.right - 8) {
     shiftX = viewerRect.right - 8 - annRect.right;
   } else if (annRect.left < viewerRect.left + 8) {
@@ -126,41 +155,32 @@ function deactivateAllHotspots() {
   });
   modelViewer.classList.remove('has-active-hotspot');
   
-  // Resume auto-rotation when no hotspots are active
   modelViewer.autoRotate = true;
-  
-  // Reset camera target to default model center
   modelViewer.cameraTarget = defaultTarget;
 }
 
-// Scale hotspots based on camera distance (orbit radius)
-// and re-position the active annotation to prevent clipping during rotation.
+// Scale hotspots based on camera distance
 modelViewer.addEventListener('camera-change', () => {
   try {
     const orbit = modelViewer.getCameraOrbit();
     const radius = orbit.radius;
     
-    // Keep hotspot visual scale stable and readable relative to zoom depth.
-    const scale = Math.max(0.55, Math.min(1.3, 1.2 / radius));
-    
+    const scale = Math.max(0.55, Math.min(1.25, 1.35 / radius));
     hotspots.forEach(hotspot => {
       hotspot.style.setProperty('--camera-scale', scale);
     });
     
-    // Re-position the active annotation so it doesn't clip when the user orbits
     const activeHotspot = document.querySelector('.Hotspot.active');
     if (activeHotspot) {
       positionAnnotation(activeHotspot);
     }
-  } catch (e) {
-    // Graceful fallback if getCameraOrbit is not ready
-  }
+  } catch (e) {}
 });
 
 // Log AR Session events
 modelViewer.addEventListener('ar-status', (event) => {
   if (event.detail.status === 'session-started') {
-    console.log('AR Session started! Model scale is fixed and placement is floor.');
+    console.log('AR Session started!');
   } else if (event.detail.status === 'not-presenting') {
     console.log('AR Session ended.');
   }
