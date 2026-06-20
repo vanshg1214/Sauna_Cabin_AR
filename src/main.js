@@ -1,5 +1,8 @@
 import './style.css';
 import '@google/model-viewer';
+import { inject } from '@vercel/analytics';
+
+inject();
 
 const modelViewer = document.querySelector('model-viewer');
 const hotspots = document.querySelectorAll('.Hotspot');
